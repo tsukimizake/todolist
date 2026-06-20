@@ -113,11 +113,11 @@ def main(): Unit \ {IO, Env, Abort, Process} =
     ensureRepo();
     let path = todoFilePath();
     match args {
-        case "add" :: title :: rest =>
-            let dueDate = match rest {
-                case "" :: Nil => LocalDate.now().toString()
-                case d :: Nil => d
-                case _        => LocalDate.now().toString()
+        case "add" :: title :: date :: Nil =>
+            let dueDate = match date {
+                case "" => LocalDate.now().toString()
+                case d => d
+                
             };
             addItem(path, title, dueDate)
         case "read" :: Nil =>
