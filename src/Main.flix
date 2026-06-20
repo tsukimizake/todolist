@@ -1,17 +1,16 @@
+use Util.Json.FromJson.decodeAtKey;
 use Util.Json.JsonPath
 use Util.Json.JsonError.DecodeErrorKind
-use Util.Json.JsonError.ParseErrorKind
 use Util.Json.JsonError;
 use Util.Json;
-import java.lang.Record
-import java.util.Vector
 use Fs.WriteFile
 use Fs.FileExists
 use Sys.Env
 use Sys.Env.getUserHomeDirectory
+import java.time.LocalDate
 
 def todoFilePath(): String \ {Env, Abort} =
-    Option.getOrAbort(getUserHomeDirectory()) ++ "/.todo.txt"
+    Option.getOrAbort(getUserHomeDirectory()) ++ "/.todo.jsonl"
 
 def getOrCreateFile(path: String): String \ {Abort, FileExists, WriteFile} =
     if (Fs.FileExists.exists(path) |> Result.getOrAbort)
@@ -45,42 +44,48 @@ instance Json.ToJson[TodoStatus] {
         }
 }
 
-enum TodoItem ({
-    title = String,
-    dueDate = String,
-    status = TodoStatus
+enum TodoItem({
+        title = String,
+        dueDate = String,
+        status = TodoStatus
 })
 
 instance Json.FromJson[TodoItem] {
-    pub def fromJson(j: Json): Result[JsonError, TodoItem] = 
-        def getAsString(field: Option[Json]): Result[JsonError, String] =
-            match field {
-                case Some(Json.JString(s)) => Ok(s)
-                case _ => Err(JsonError.Parse(1, ParseErrorKind.InvalidUnicode("")))
-            };
-        match j {
-            case Json.JObject(fields) =>
-                let title = Map.get("title", fields)|> getAsString ;
-                let dueDate = Map.get("dueDate", fields) |> getAsString; 
-                let status = Map.get("status", fields) |>getAsString |> fromJson();
-                match (title, dueDate, status) {
-                    case (Ok(t), Ok(d), Ok(s)) => Ok(TodoItem({title = t, dueDate = d, status = s}))
-                    case _ => Err(JsonError.Decode(JsonPath.empty(), DecodeErrorKind.TypeMismatch("")))
-                }
-            case _ => Err(JsonError.Decode(JsonPath.empty(), DecodeErrorKind.TypeMismatch("")))
-        }
-                
+    pub def fromJson(j: Json): Result[JsonError, TodoItem] =
+        forM (
+            title <- decodeAtKey("title", j);
+            dueDate <- decodeAtKey("dueDate", j);
+            status <- decodeAtKey("status", j)
+        ) yield TodoItem.TodoItem({title = title, dueDate = dueDate, status = status})
 }
 
-// instance Json.ToJson[TodoItem] {
-//
-//     pub def toJson(x: t): Json = ???
-//
-// }
+instance Json.ToJson[TodoItem] {
+    pub def toJson(x: TodoItem): Json =
+        let TodoItem.TodoItem(r) = x;
+        Json.JObject(Map#{
+            "title"   => Json.ToJson.toJson(r#title),
+            "dueDate" => Json.ToJson.toJson(r#dueDate),
+            "status"  => Json.ToJson.toJson(r#status)
+        })
+}
 
 
 def main(): Unit \ {IO, Env, Abort} =
     let args = Sys.Env.getArgs();
-    println(args);
-    let p = todoFilePath();
-    println(p)
+    let path = todoFilePath();
+    match args {
+        case "add" :: title :: Nil =>
+            let today = LocalDate.now().toString();
+            let newItem =
+                TodoItem.TodoItem({title = title, dueDate = today, status = TodoStatus.TODO})
+                    |> Json.ToJson.toJson
+                    |> Json.toCompactString;
+            let _ = Fs.FsLayer.append({str = newItem ++ "\n"}, path) |> Result.getOrAbort;
+            println("Added: " ++ title)
+        case "read" :: Nil =>
+            let lines = Fs.FsLayer.readLines(path) |> Result.getOrAbort;
+            let nonEmpty = List.filter(s -> not String.isEmpty(s), lines);
+            println("[" ++ String.intercalate(",", nonEmpty) ++ "]")
+        case _ =>
+            println("Usage: add <title> | read")
+    }
