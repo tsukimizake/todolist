@@ -11,3 +11,6 @@ add task:
 
 read:
     flix run -- read | from json
+
+delete title:
+    flix run -- delete "{{title}}"

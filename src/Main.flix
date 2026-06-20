@@ -7,10 +7,39 @@ use Fs.WriteFile
 use Fs.FileExists
 use Sys.Env
 use Sys.Env.getUserHomeDirectory
+use Sys.Process
 import java.time.LocalDate
 
+def todoDir(): String \ {Env, Abort} =
+    Option.getOrAbort(getUserHomeDirectory()) ++ "/.todolist"
+
 def todoFilePath(): String \ {Env, Abort} =
-    Option.getOrAbort(getUserHomeDirectory()) ++ "/.todo.jsonl"
+    todoDir() ++ "/todo.jsonl"
+
+def runGit(cwd: String, args: List[String]): Unit \ {Process, Abort} =
+    let ph = Sys.Process.execWithCwd("git", args, Some(cwd)) |> Result.getOrAbort;
+    let _ = Sys.Process.waitFor(ph) |> Result.getOrAbort;
+    ()
+
+def ensureRepo(): Unit \ {Env, Abort, IO, Process} =
+    let dir = todoDir();
+    let _ = Fs.FsLayer.mkDirs(dir) |> Result.getOrAbort;
+    let gitDir = dir ++ "/.git";
+    if (Fs.FsLayer.exists(gitDir) |> Result.getOrAbort)
+        ()
+    else
+        runGit(dir, "init" :: Nil);
+    let path = todoFilePath();
+    if (Fs.FsLayer.exists(path) |> Result.getOrAbort)
+        ()
+    else
+        let _ = Fs.FsLayer.write({str = ""}, path) |> Result.getOrAbort;
+        ()
+
+def commit(msg: String): Unit \ {Env, Abort, Process} =
+    let dir = todoDir();
+    runGit(dir, "add" :: "." :: Nil);
+    runGit(dir, "commit" :: "-m" :: msg :: Nil)
 
 def getOrCreateFile(path: String): String \ {Abort, FileExists, WriteFile} =
     if (Fs.FileExists.exists(path) |> Result.getOrAbort)
@@ -70,8 +99,9 @@ instance Json.ToJson[TodoItem] {
 }
 
 
-def main(): Unit \ {IO, Env, Abort} =
+def main(): Unit \ {IO, Env, Abort, Process} =
     let args = Sys.Env.getArgs();
+    ensureRepo();
     let path = todoFilePath();
     match args {
         case "add" :: title :: Nil =>
@@ -81,11 +111,18 @@ def main(): Unit \ {IO, Env, Abort} =
                     |> Json.ToJson.toJson
                     |> Json.toCompactString;
             let _ = Fs.FsLayer.append({str = newItem ++ "\n"}, path) |> Result.getOrAbort;
+            commit("add: " ++ title);
             println("Added: " ++ title)
         case "read" :: Nil =>
             let lines = Fs.FsLayer.readLines(path) |> Result.getOrAbort;
             let nonEmpty = List.filter(s -> not String.isEmpty(s), lines);
             println("[" ++ String.intercalate(",", nonEmpty) ++ "]")
+        case "delete" :: title :: Nil =>
+            let lines = Fs.FsLayer.readLines(path) |> Result.getOrAbort;
+            let filtered = List.filter(s -> not String.contains({substr = title}, s), lines);
+            let _ = Fs.FsLayer.write({str = String.intercalate("\n", filtered) ++ "\n"}, path) |> Result.getOrAbort;
+            commit("delete: " ++ title);
+            println("Deleted entries containing: " ++ title)
         case _ =>
-            println("Usage: add <title> | read")
+            println("Usage: add <title> | read | delete <title>")
     }
