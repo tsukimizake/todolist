@@ -6,11 +6,12 @@ default:
 build:
     flix build
 
-add task:
-    flix run -- add "{{task}}"
+add task dueDate="":
+    flix run -- add "{{task}}" "{{dueDate}}"
+
 
 read:
-    flix run -- read | from json
+    flix run -- read | from json | sort-by dueDate
 
 delete title:
     flix run -- delete "{{title}}"

@@ -41,6 +41,15 @@ def commit(msg: String): Unit \ {Env, Abort, Process} =
     runGit(dir, "add" :: "." :: Nil);
     runGit(dir, "commit" :: "-m" :: msg :: Nil)
 
+def addItem(path: String, title: String, dueDate: String): Unit \ {IO, Env, Abort, Process} =
+    let newItem =
+        TodoItem.TodoItem({title = title, dueDate = dueDate, status = TodoStatus.TODO})
+            |> Json.ToJson.toJson
+            |> Json.toCompactString;
+    let _ = Fs.FsLayer.append({str = newItem ++ "\n"}, path) |> Result.getOrAbort;
+    commit("add: " ++ title);
+    println("Added: " ++ title ++ " (" ++ dueDate ++ ")")
+
 def getOrCreateFile(path: String): String \ {Abort, FileExists, WriteFile} =
     if (Fs.FileExists.exists(path) |> Result.getOrAbort)
         path
@@ -104,15 +113,13 @@ def main(): Unit \ {IO, Env, Abort, Process} =
     ensureRepo();
     let path = todoFilePath();
     match args {
-        case "add" :: title :: Nil =>
-            let today = LocalDate.now().toString();
-            let newItem =
-                TodoItem.TodoItem({title = title, dueDate = today, status = TodoStatus.TODO})
-                    |> Json.ToJson.toJson
-                    |> Json.toCompactString;
-            let _ = Fs.FsLayer.append({str = newItem ++ "\n"}, path) |> Result.getOrAbort;
-            commit("add: " ++ title);
-            println("Added: " ++ title)
+        case "add" :: title :: rest =>
+            let dueDate = match rest {
+                case "" :: Nil => LocalDate.now().toString()
+                case d :: Nil => d
+                case _        => LocalDate.now().toString()
+            };
+            addItem(path, title, dueDate)
         case "read" :: Nil =>
             let lines = Fs.FsLayer.readLines(path) |> Result.getOrAbort;
             let nonEmpty = List.filter(s -> not String.isEmpty(s), lines);
@@ -124,5 +131,5 @@ def main(): Unit \ {IO, Env, Abort, Process} =
             commit("delete: " ++ title);
             println("Deleted entries containing: " ++ title)
         case _ =>
-            println("Usage: add <title> | read | delete <title>")
+            println("Usage: add <title> [dueDate] | read | delete <title>")
     }
