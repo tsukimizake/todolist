@@ -135,7 +135,7 @@ def main(): Unit \ {IO, Env, Abort, Process} =
                 case d  => d
             };
             addItem(path, title, dueDate)
-        case "read" :: Nil =>
+        case "list" :: Nil =>
             let content = Fs.FsLayer.read(path) |> Result.getOrAbort;
             println(String.trim(content))
         case "delete" :: title :: Nil =>
@@ -150,5 +150,5 @@ def main(): Unit \ {IO, Env, Abort, Process} =
                 let TodoBody.TodoBody(r) = body;
                 TodoBody.TodoBody({status = TodoStatus.DONE | r}))
         case _ =>
-            println("Usage: add <title> <dueDate> | read | delete <title> | touch <title> | complete <title>")
+            println("Usage: add <title> <dueDate> | list | delete <title> | touch <title> | complete <title>")
     }
