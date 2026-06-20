@@ -10,7 +10,13 @@ add task dueDate="today":
     let dueDate = ("{{dueDate}}" | date from-human | format date "%Y-%m-%d"); flix run -- add "{{task}}" $dueDate
 
 read:
-    flix run -- read | from json | sort-by dueDate
+    flix run -- read | from json | transpose title item | flatten item | sort-by dueDate
 
-delete title:
-    flix run -- delete "{{title}}"
+delete:
+    let title = (flix run -- read | from json | columns | str join (char nl) | fzf | str trim); flix run -- delete $title
+
+touch:
+    let title = (flix run -- read | from json | columns | str join (char nl) | fzf | str trim); flix run -- touch $title
+
+complete:
+    let title = (flix run -- read | from json | columns | str join (char nl) | fzf | str trim); flix run -- complete $title

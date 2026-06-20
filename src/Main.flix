@@ -3,8 +3,6 @@ use Util.Json.JsonPath
 use Util.Json.JsonError.DecodeErrorKind
 use Util.Json.JsonError;
 use Util.Json;
-use Fs.WriteFile
-use Fs.FileExists
 use Sys.Env
 use Sys.Env.getUserHomeDirectory
 use Sys.Process
@@ -14,7 +12,7 @@ def todoDir(): String \ {Env, Abort} =
     Option.getOrAbort(getUserHomeDirectory()) ++ "/.todolist"
 
 def todoFilePath(): String \ {Env, Abort} =
-    todoDir() ++ "/todo.jsonl"
+    todoDir() ++ "/todo.json"
 
 def runGit(cwd: String, args: List[String]): Unit \ {Process, Abort} =
     let ph = Sys.Process.execWithCwd("git", args, Some(cwd)) |> Result.getOrAbort;
@@ -33,29 +31,13 @@ def ensureRepo(): Unit \ {Env, Abort, IO, Process} =
     if (Fs.FsLayer.exists(path) |> Result.getOrAbort)
         ()
     else
-        let _ = Fs.FsLayer.write({str = ""}, path) |> Result.getOrAbort;
+        let _ = Fs.FsLayer.write({str = "{}\n"}, path) |> Result.getOrAbort;
         ()
 
 def commit(msg: String): Unit \ {Env, Abort, Process} =
     let dir = todoDir();
     runGit(dir, "add" :: "." :: Nil);
     runGit(dir, "commit" :: "-m" :: msg :: Nil)
-
-def addItem(path: String, title: String, dueDate: String): Unit \ {IO, Env, Abort, Process} =
-    let newItem =
-        TodoItem.TodoItem({title = title, dueDate = dueDate, status = TodoStatus.TODO})
-            |> Json.ToJson.toJson
-            |> Json.toCompactString;
-    let _ = Fs.FsLayer.append({str = newItem ++ "\n"}, path) |> Result.getOrAbort;
-    commit("add: " ++ title);
-    println("Added: " ++ title ++ " (" ++ dueDate ++ ")")
-
-def getOrCreateFile(path: String): String \ {Abort, FileExists, WriteFile} =
-    if (Fs.FileExists.exists(path) |> Result.getOrAbort)
-        path
-    else
-        let _ = Fs.WriteFile.write({str = ""}, path);
-        path
 
 enum TodoStatus {
     case TODO,
@@ -82,31 +64,65 @@ instance Json.ToJson[TodoStatus] {
         }
 }
 
-enum TodoItem({
-        title = String,
-        dueDate = String,
-        status = TodoStatus
-})
+enum TodoBody({dueDate = String, status = TodoStatus})
 
-instance Json.FromJson[TodoItem] {
-    pub def fromJson(j: Json): Result[JsonError, TodoItem] =
+instance Json.FromJson[TodoBody] {
+    pub def fromJson(j: Json): Result[JsonError, TodoBody] =
         forM (
-            title <- decodeAtKey("title", j);
             dueDate <- decodeAtKey("dueDate", j);
             status <- decodeAtKey("status", j)
-        ) yield TodoItem.TodoItem({title = title, dueDate = dueDate, status = status})
+        ) yield TodoBody.TodoBody({dueDate = dueDate, status = status})
 }
 
-instance Json.ToJson[TodoItem] {
-    pub def toJson(x: TodoItem): Json =
-        let TodoItem.TodoItem(r) = x;
+instance Json.ToJson[TodoBody] {
+    pub def toJson(x: TodoBody): Json =
+        let TodoBody.TodoBody(r) = x;
         Json.JObject(Map#{
-            "title"   => Json.ToJson.toJson(r#title),
             "dueDate" => Json.ToJson.toJson(r#dueDate),
             "status"  => Json.ToJson.toJson(r#status)
         })
 }
 
+def loadTodos(path: String): Map[String, TodoBody] \ {IO, Abort} =
+    let content = Fs.FsLayer.read(path) |> Result.getOrAbort;
+    if (String.isEmpty(String.trim(content)))
+        Map.empty()
+    else
+        (Json.decode(content): Result[JsonError, Map[String, TodoBody]]) |> Result.getOrAbort
+
+def saveTodos(path: String, todos: Map[String, TodoBody]): Unit \ {IO, Abort} =
+    let json = Json.toPrettyString(2, Json.ToJson.toJson(todos));
+    let _ = Fs.FsLayer.write({str = json ++ "\n"}, path) |> Result.getOrAbort;
+    ()
+
+def addItem(path: String, title: String, dueDate: String): Unit \ {IO, Env, Abort, Process} =
+    let todos = loadTodos(path);
+    if (Map.memberOf(title, todos))
+        Abort.abortWithTrace("Title already exists: ${title}")
+    else
+        let body = TodoBody.TodoBody({dueDate = dueDate, status = TodoStatus.TODO});
+        saveTodos(path, Map.insert(title, body, todos));
+        commit("add: " ++ title);
+        println("Added: " ++ title ++ " (" ++ dueDate ++ ")")
+
+def deleteItem(path: String, title: String): Unit \ {IO, Env, Abort, Process} =
+    let todos = loadTodos(path);
+    if (not Map.memberOf(title, todos))
+        Abort.abortWithTrace("No such title: ${title}")
+    else
+        saveTodos(path, Map.remove(title, todos));
+        commit("delete: " ++ title);
+        println("Deleted: " ++ title)
+
+def updateItem(path: String, title: String, transform: TodoBody -> TodoBody): Unit \ {IO, Env, Abort, Process} =
+    let todos = loadTodos(path);
+    match Map.get(title, todos) {
+        case None => Abort.abortWithTrace("No such title: ${title}")
+        case Some(body) =>
+            saveTodos(path, Map.insert(title, transform(body), todos));
+            commit("update: " ++ title);
+            println("Updated: " ++ title)
+    }
 
 def main(): Unit \ {IO, Env, Abort, Process} =
     let args = Sys.Env.getArgs();
@@ -116,20 +132,23 @@ def main(): Unit \ {IO, Env, Abort, Process} =
         case "add" :: title :: date :: Nil =>
             let dueDate = match date {
                 case "" => LocalDate.now().toString()
-                case d => d
-                
+                case d  => d
             };
             addItem(path, title, dueDate)
         case "read" :: Nil =>
-            let lines = Fs.FsLayer.readLines(path) |> Result.getOrAbort;
-            let nonEmpty = List.filter(s -> not String.isEmpty(s), lines);
-            println("[" ++ String.intercalate(",", nonEmpty) ++ "]")
+            let content = Fs.FsLayer.read(path) |> Result.getOrAbort;
+            println(String.trim(content))
         case "delete" :: title :: Nil =>
-            let lines = Fs.FsLayer.readLines(path) |> Result.getOrAbort;
-            let filtered = List.filter(s -> not String.contains({substr = title}, s), lines);
-            let _ = Fs.FsLayer.write({str = String.intercalate("\n", filtered) ++ "\n"}, path) |> Result.getOrAbort;
-            commit("delete: " ++ title);
-            println("Deleted entries containing: " ++ title)
+            deleteItem(path, title)
+        case "touch" :: title :: Nil =>
+            let today = LocalDate.now().toString();
+            updateItem(path, title, body ->
+                let TodoBody.TodoBody(r) = body;
+                TodoBody.TodoBody({dueDate = today | r}))
+        case "complete" :: title :: Nil =>
+            updateItem(path, title, body ->
+                let TodoBody.TodoBody(r) = body;
+                TodoBody.TodoBody({status = TodoStatus.DONE | r}))
         case _ =>
-            println("Usage: add <title> [dueDate] | read | delete <title>")
+            println("Usage: add <title> <dueDate> | read | delete <title> | touch <title> | complete <title>")
     }
